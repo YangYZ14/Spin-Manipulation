@@ -1,5 +1,9 @@
 # Spin-Manipulation
 
-## Hello
+---
 
-# Just for Test
+
+
+* # NODMR
+
+### Nuclear optical detection of magnetic resonance.
