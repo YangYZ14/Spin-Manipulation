@@ -2,6 +2,6 @@
 
 ---
 
-* # NODMR
+* # ODNMR
 
-Nuclear optical detection of magnetic resonance. Using AWG instead of spincore.
+Optical detection of nuclear magnetic resonance. Using AWG instead of spincore.
