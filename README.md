@@ -2,8 +2,6 @@
 
 ---
 
-
-
 * # NODMR
 
-### Nuclear optical detection of magnetic resonance.
+Nuclear optical detection of magnetic resonance. Using AWG.
