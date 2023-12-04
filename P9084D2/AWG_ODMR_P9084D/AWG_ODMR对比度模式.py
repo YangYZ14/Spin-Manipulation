@@ -44,22 +44,22 @@ class Interface:
         #连接AWG，并且提取仪器参数，预设一些参数
         self.AWG_TASK= AWG_Set.AWG(IP = '169.254.88.73')
         self.sample_rate = 9E9  #采样率设置
-        self.power = 0.1  # 设置微波输出的幅值
-        self.ptop1 = 0.5  # 设置marker1输出的幅值
+        self.power = 0.5  # 设置微波输出的幅值
+        self.ptop1 = 0.6  # 设置marker1输出的幅值
         self.ptop2 = 0.5  # 设置marker2输出的幅值
-        self.offs1 = 0.25 # 设置marker1的偏置
+        self.offs1 = 0.3 # 设置marker1的偏置
         self.offs2 = 0.25 # 设置marker2的偏置
         
         # 不同的step代表脉冲序列的不同阶段，不同序列的step数目不同，step内容不同。第二列的数字转换为
         # 二进制后第一位：微波的开关；第二位：AOM的开关；第三位：NI的开关。第三列为每个step的持续时间，单位ns
         # 对于8G/s的采样率，每1ns为16个wave-point，分配wave-point内存时为64的倍数，64个wave-point为4ns的区别
-        self.On_odmr_sequence = [['step1', 0, 3000],
+        self.on_odmr_sequence = [['step1', 0, 3000],
                              ['step2', 7,100000],
                              ['step3', 0, 3000]]
 
-        self.Off_odmr_sequence = [['step1', 0, 3000],
-                             ['step2', 6,100000],
-                             ['step1', 0, 3000]]
+        self.off_odmr_sequence = [['step3', 0, 3000],
+                             ['step4', 6,100000],
+                             ['step5', 0, 3000]]
 
 
         self.showLockPoint = Interface2()
@@ -117,7 +117,7 @@ class Interface:
             # 对于每一个微波频率定义到一个segment中去
             self.task_num = 1
 
-            self.seglen, self.Channel1_Segment, self.Marker_Segment = self.AWG_TASK.sequence_set(self.On_odmr_sequence,self.MW_list[self.i],self.sample_rate)
+            self.seglen, self.Channel1_Segment, self.Marker_Segment = self.AWG_TASK.sequence_set(self.on_odmr_sequence,self.MW_list[self.i],self.sample_rate)
             # 将定义好的segment下载到相应的channel和marker段上去
             self.AWG_TASK.download_channel_segment(self.seglen, self.Channel1_Segment, self.power, self.task_num)
             self.AWG_TASK.download_marker_segment(self.Marker_Segment, self.ptop1, self.ptop2, self.offs1, self.offs2, self.task_num)
@@ -125,12 +125,20 @@ class Interface:
             self.counter.DAQCounterTask.start()
             self.AWG_TASK.start_sequence()
             self.data = self.counter.Read()  #从NI计数卡读取数据
+            index = np.array(range(0, len(self.data), 2))
+            print('On_counts:')
+            print(self.data)
+            # self.On_data = self.data[index]
+            # self.Off_data = self.data[index + 1]
             self.On_data = self.data[1:]   #Ni读取的第一个数据总有问题，不采用
-            self.On_counts = sum(self.On_data) 
+            self.On_counts = sum(self.On_data)
+            # self.Off_data = self.Off_data[1:]   #Ni读取的第一个数据总有问题，不采用
+            # self.Off_counts = sum(self.Off_data)
+            #time.sleep(20) 
             self.AWG_TASK.stop_sequence()
             self.counter.DAQCounterTask.stop()
 
-            self.seglen, self.Channel1_Segment, self.Marker_Segment = self.AWG_TASK.sequence_set(self.Off_odmr_sequence,self.MW_list[self.i],self.sample_rate)
+            self.seglen, self.Channel1_Segment, self.Marker_Segment = self.AWG_TASK.sequence_set(self.off_odmr_sequence,self.MW_list[self.i],self.sample_rate)
             # 将定义好的segment下载到相应的channel和marker段上去
             self.AWG_TASK.download_channel_segment(self.seglen, self.Channel1_Segment, self.power, self.task_num)
             self.AWG_TASK.download_marker_segment(self.Marker_Segment, self.ptop1, self.ptop2, self.offs1, self.offs2, self.task_num)
@@ -144,12 +152,12 @@ class Interface:
             self.counter.DAQCounterTask.stop()
 
             self.contrast_1[self.i] = (self.On_counts - self.Off_counts) / self.Off_counts
-            if self.contrast_1[self.i] > 0:
-                self.contrast_1[self.i] = -self.contrast_1[self.i]
+            # if self.contrast_1[self.i] > 0:
+            #     self.contrast_1[self.i] = -self.contrast_1[self.i]
             print('ODMR contrast:')
             print(self.contrast_1)
             self.i += 1  #i开始迭代
-            self.lock_count = self.Off_counts + 100
+            self.lock_count = self.Off_counts
 
 
     def update(self):
