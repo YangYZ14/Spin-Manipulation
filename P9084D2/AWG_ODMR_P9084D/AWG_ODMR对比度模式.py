@@ -61,7 +61,6 @@ class Interface:
                              ['step4', 6,100000],
                              ['step5', 0, 3000]]
 
-
         self.showLockPoint = Interface2()
         self.a=0
         self.b=0
