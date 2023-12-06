@@ -1,47 +1,28 @@
-#import pyvisa
-import matplotlib.pyplot as plt
+import pyvisa as visa
 import numpy as np
 import time
-from teproteus import TEProteusAdmin, TEProteusInst
-from tevisainst import TEVisaInst
-
 
 class AWG:
-    def __init__(self,IP=None):
+    def __init__(self,IP=None, SampleRate=9e9):
         #初始化，连接AWG
-        self.awg = TEVisaInst(IP)
-        self.awg._init_vi_inst()
+        resourceManager = visa.ResourceManager()
+        dev = 'TCPIP0::' + IP + '::5025::SOCKET'
+        self.awg = resourceManager.open_resource(dev)
+        self.awg.read_termination = '\n'
+        self.awg.write_termination = '\n'
 
+        self.awg.timeout = 30000
         #输出仪器型号
-        self.sample_rate_dac = 9E9
-        print(self.awg.send_scpi_query('*IDN?'))
+        self.sample_rate_dac = SampleRate
+        print(self.awg.query('*IDN?'))
+        print('连接成功')
 
         # 重置仪器
-        print(self.awg.send_scpi_query('*CLS; *RST;*OPC?'))
-
-        # 获取通道数
-        resp = self.awg.send_scpi_query(":INST:CHAN? MAX")
-        print("Number of channels: " + resp)
-        num_channels = int(resp)
-
-        # 获取允许的最大段数
-        resp = self.awg.send_scpi_query(":TRAC:SEL:SEGM? MAX")
-        print("Max segment number: " + resp)
-        self.max_seg_number = int(resp)
-
-        # 以字节为单位获取可用内存(每个DDR):
-        resp = self.awg.send_scpi_query(":TRAC:FREE?")
-        arbmem_capacity = int(resp)
-        print("Available memory per DDR: {0:,} wave-bytes".format(arbmem_capacity))
-        self.awg.send_scpi_cmd(':FREQ 9e9')
-
-        # 删除所有跟踪（Trace），初始化连续模式
-        self.paranoia_level = 2  #方便debug
-        self.awg.send_scpi_cmd(':TRAC:DEL:ALL', self.paranoia_level)
+        print(self.awg.write('*CLS; *RST'))
 
         #self.awg.send_scpi_cmd(':INIT:CONT ON')
         # 获取用户的波形格式
-        resp = self.awg.send_scpi_query(":TRAC:FORM?")
+        resp = self.awg.query(":TRAC:FORM?")
         print("User's waveform format: " + resp)
 
         # 推断用户波形中波点的宽度
@@ -55,7 +36,7 @@ class AWG:
         self.mid_wpt = self.max_wpt / 2.0
 
         # 用于直流空闲波形的DAC电平，DAC的模式查询，M0代表16位宽度，M1代表8位宽度
-        resp = self.awg.send_scpi_query(':SYST:INF:DAC?')
+        resp = self.awg.query(':SYST:INF:DAC?')
         self.dac_mode = resp
         print('DAC mode {0} '.format(self.dac_mode))
 
@@ -68,8 +49,12 @@ class AWG:
             self.data_type = np.uint8
         self.half_dac = self.max_dac // 2.0
         
-        resp = self.awg.send_scpi_query(':FREQ?')
+        resp = self.awg.query(':FREQ?')
         print("Sample Rate: {0}".format(resp))
+
+        self.awg.write(':FREQ:RAST ' + str(SampleRate))
+        self.awg.write(':TRAC:FORM U8')
+        self.awg.write(':TRAC:DEL:ALL')
 
 
     def sequence_set(self,sequence, freq=3E9,sample_rate=9E9):
@@ -87,15 +72,15 @@ class AWG:
         self.seglen = sum(duration for _, _, duration in self.ODMR_sequence_wavelength)
         self.seglen = int(self.seglen)
         print("未动态调节前的总长度:", self.seglen)
-        print(self.ODMR_sequence_wavelength)
+
         # 动态调节长度到64的倍数
         for item in self.ODMR_sequence_wavelength:
-            item[2] = (int(item[2] + 63) // 64) * 64 if (int(item[2] + 63) // 64) * 64 > 0 else 0
+            item[2] = (int(item[2] + 63) // 64) * 64
 
         self.Sequence_wavelength = np.array(self.ODMR_sequence_wavelength)[:, -1]
         self.seglen = sum(int(value) for value in self.Sequence_wavelength)
         print("动态调节后的总长度:", self.seglen)
-        print(self.Sequence_wavelength)
+
         # 提取最后一列并计算允许到每个步骤所需的总时间
         self.ODMR_sequence_length = [sum(duration for _, _, duration in self.ODMR_sequence[:i + 1])
                                 for i in range(len(self.ODMR_sequence_wavelength))]
@@ -233,154 +218,138 @@ class AWG:
         self.Marker_Segment = np.array(self.Marker_Segment)
         self.Marker_Segment = self.Marker_Segment.astype(np.uint8)
 
-        return self.seglen, self.Channel1_Segment, self.Marker_Segment
+        return self.seglen, self.Channel1_Segment, self.Marker_Segment, self.Marker1_Segment, self.Marker2_Segment, self.Squence_time_all
 
 
-    def download_channel_segment(self,seglen = 640000, Channel1_Segment = np.array([]).astype(np.uint8), power = 1.3,segnum = 1):
+    def download_channel_segment(self,seglen = 640000, Channel1_Segment = np.array([]).astype(np.uint8), power = 1.3, chann_num = 1, segnum = 1):
+        self.chann_num = chann_num
         self.seglen = seglen
         self.Channel1_Segment = Channel1_Segment
         self.power = power
         self.segnum = segnum
-        print('Download sequence wave segment 1 to channel 1')
+        print('Download sequence wave segment {0} to channel {1}'.format(self.segnum,self.chann_num))
+
         # 选择通道
-        self.awg.send_scpi_cmd(':INST:CHAN 1')
-        #self.awg.send_scpi_cmd('INST:CONT ON')
+        self.awg.write(':INST:CHAN {0}'.format(self.chann_num))
+        #self.awg.write(':FUNC:MODE ARB')
+        # self.awg.write(':MODE DIR')
+        # self.awg.write(':OUTP OFF')
+
         #定义第几段和这个段对长度
-        self.awg.send_scpi_cmd(':TRAC:DEF {0},{1}'.format(self.segnum, self.seglen))
-        # 选择定义的segment
-        self.awg.send_scpi_cmd(':TRAC:SEL {0}'.format(self.segnum))
-        # 在写入二进制数据之前增加超时时间
-        self.awg.timeout = 30000
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
+        self.awg.write(':TRAC:DEF {0},{1}'.format(self.segnum, self.seglen))
+        self.awg.write(':TRAC:SEL {0}'.format(self.segnum))
+        self.awg.write_binary_values(':TRAC:DATA', self.Channel1_Segment, datatype='B')
+        #self.awg.write(':FUNC:MODE:SEGM {0}'.format(self.segnum))
+        self.awg.write(':SOUR:VOLT {0}'.format(self.power))
+        resp = self.awg.query(':SYST:ERR?')
         resp = resp.rstrip()
         if not resp.startswith('0'):
-            print('ERROR: "{0}" after writing binary values'.format(resp))
-        # 发送二进制数据给AWG，*OPC?加到前缀的开头以询问前一个语句是否执行完毕
-        self.awg.write_binary_data(':TRAC:DATA', self.Channel1_Segment)
-        self.awg.timeout = 10000
-        #设置channel1输出的幅值
-        self.awg.send_scpi_cmd(':SOUR:VOLT {0}'.format(self.power))
-        resp = self.awg.send_scpi_query(':VOLT?')
-        print('VOLT: ' + resp)
-        
+            print('ERROR: "{0}" after download channel segment'.format(resp))
 
-    def download_marker_segment(self, Marker_Segment = np.array([]).astype(np.uint8), marker1_ptop = 0, marker2_ptop = 0, marker1_offs = 0, marker2_offs = 0, segnum = 1):
+
+    def download_marker_segment(self, Marker_Segment = np.array([]).astype(np.uint8), marker1_ptop = 0, marker2_ptop = 0, marker1_offs = 0, marker2_offs = 0, chann_num = 1, segnum = 1):
         print('Download marker segment')
-        # 在写入二进制数据之前增加超时时间
-        self.awg.timeout = 300000
+        self.chann_num = chann_num
         self.segnum = segnum
+        self.Marker_Segment = Marker_Segment
         self.marker1_ptop = marker1_ptop
         self.marker2_ptop = marker2_ptop
         self.marker1_offs = marker1_offs
         self.marker2_offs = marker2_offs
-
+        self.awg.write(':INST:CHAN {0}'.format(self.chann_num))
         # 将Marker的波形用二进制数据写入仪器
-        self.awg.send_scpi_cmd(":INST:CHAN 1")
-        self.awg.send_scpi_cmd(':TRAC:SEL {0}'.format(self.segnum))
-        self.awg.write_binary_data('*OPC?; :MARK:DATA', self.Marker_Segment)
-        # 设置超时时间
-        self.awg.timeout = 10000
-        self.awg.send_scpi_cmd('*OPC?; :MARK:SEL 1')
-        self.awg.send_scpi_cmd(':MARK:VOLT:PTOP {0}'.format(self.marker1_ptop))
-        self.awg.send_scpi_cmd(':MARK:VOLT:OFFS {0}'.format(self.marker1_offs))
-        self.awg.send_scpi_cmd('*OPC?; :MARK:SEL 2')
-        self.awg.send_scpi_cmd(':MARK:VOLT:PTOP {0}'.format(self.marker2_ptop))
-        self.awg.send_scpi_cmd(':MARK:VOLT:OFFS {0}'.format(self.marker2_offs))
-        
-        #设置偏置，默认值为0
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
+        self.awg.write(':TRAC:SEL {0}'.format(self.segnum))
+        print('Marker_Segment:')
+        print(Marker_Segment)
+        self.awg.write_binary_values(':MARK:DATA', self.Marker_Segment, datatype='B')
+        self.awg.write(':FUNC:MODE:SEGM {0}'.format(self.segnum))
+        self.awg.write(':MARK:SEL 1')
+        self.awg.write(':MARK:VOLT:PTOP {0}'.format(self.marker1_ptop))
+        self.awg.write(':MARK:VOLT:OFFS {0}'.format(self.marker1_offs))
+        self.awg.write(':MARK:SEL 2')
+        self.awg.write(':MARK:VOLT:PTOP {0}'.format(self.marker2_ptop))
+        self.awg.write(':MARK:VOLT:OFFS {0}'.format(self.marker2_offs))
+        resp = self.awg.query(':SYST:ERR?')
         resp = resp.rstrip()
         if not resp.startswith('0'):
-            print('ERROR: "{0}" after2 writing binary values'.format(resp))
-        else:
-            print('没有报错')
+            print('ERROR: "{0}" after download marker segment'.format(resp))
 
-    def sequence_task(self, loop_num = 100, segnb = 1):
+
+    def sequence_task(self, loop_num = 100, chann_num=1, total_task=1,task_num=1, segnb = 1):
         print('Setting to Task mode')
+        self.total_task = total_task
+        self.task_num = task_num
+        self.chann_num = chann_num
         self.loop_num = loop_num
         self.segnb = segnb
         self.curr_segnb = segnb
-        self.awg.send_scpi_cmd('INST:CHAN 1')
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
+
+        self.awg.write('INST:CHAN {0}'.format(self.chann_num))
+        self.awg.write(':TASK:COMP:LENG {0}'.format(self.task_num))
+        self.awg.write('TASK:COMP:SEL {0}'.format(self.task_num))
+        self.awg.write(':TASK:COMP:TYPE SING')
+        self.awg.write(':TASK:COMP:SEGM {0}'.format(self.segnb))
+        self.awg.write(':TASK:COMP:LOOP 0')
+        self.awg.write(':TASK:COMP:WRITE')
+        print('Set Task {0} table of channel {1} Over'.format(self.task_num,self.chann_num))
+        resp = self.awg.query(':SYST:ERR?')
         resp = resp.rstrip()
         if not resp.startswith('0'):
-            print('ERROR: "{0}" before set task loop'.format(resp))
-        # self.awg.send_scpi_cmd(':TRAC:SEL:TIM IMM')
-        # self.awg.send_scpi_cmd(':TRIG:MODE IMM')
-        # self.awg.send_scpi_cmd(':TASK:COMP:DTR ON')
-        # self.awg.send_scpi_cmd(':DIG:TRIG:SOUR TASK1')
-        # self.awg.send_scpi_cmd(':TASK:SYNC')
-        self.awg.send_scpi_cmd(':TASK:COMP:LENG 1')
-        self.awg.send_scpi_cmd('TASK:COMP:SEL 1')
-        self.awg.send_scpi_cmd(':TASK:COMP:TYPE SING')
-        self.awg.send_scpi_cmd(':TASK:COMP:LOOP 0')
-        #self.awg.send_scpi_cmd(':TASK:COMP:SEQ 1000000')
-        self.awg.timeout = 300000
-        
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
-        resp = resp.rstrip()
-        if not resp.startswith('0'):
-            print('ERROR: "{0}" after set task loop'.format(resp))
-        #self.awg.send_scpi_cmd((':TASK:COMP:SEGM {0}'.format(self.curr_segnb+1)))
-        
-        self.awg.send_scpi_cmd(':TASK:COMP:WRIT')
-        print('Downloading Task table of channel1')
-        print(resp)
+            print('ERROR: "{0}" after set sequence task'.format(resp))
 
 
     def start_sequence(self):
-        self.awg.send_scpi_cmd(':INST:CHAN 1')
-        self.awg.send_scpi_cmd('FUNC:MODE ARB')
+        
+        self.awg.write(':INST:CHAN 1')
+        self.awg.write(':FUNC:MODE:SEGM 1')
+        # self.awg.write('FUNC:MODE Task')
+        # self.awg.write(':FUNC:MODE:TASK 1')
+        self.awg.write('OUTP ON')
+        self.awg.write(':MARK:SEL 1')
+        self.awg.write(':MARK:STAT ON')
+        self.awg.write(':MARK:SEL 2')
+        self.awg.write(':MARK:STAT ON')
 
-        #time.sleep(10)
-        #self.awg.send_scpi_cmd('FUNC:MODE TASK')
-        #self.awg.send_scpi_cmd(':FUNC:MODE:TASK 1')
-        self.awg.send_scpi_cmd('OUTP ON')
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
-        resp = resp.rstrip()
-        if not resp.startswith('0'):
-            print('ERROR: "{0}" after start task loop'.format(resp))
-        resp = self.awg.send_scpi_query('OUTP?')
-        self.awg.send_scpi_cmd('FUNC:MODE TASK')
-        self.awg.send_scpi_cmd(':MARK:SEL 1')
-        self.awg.send_scpi_cmd(':MARK:STAT ON')
-        self.awg.send_scpi_cmd(':MARK:SEL 2')
-        self.awg.send_scpi_cmd(':MARK:STAT ON')
-        resp = self.awg.send_scpi_query(':SYST:ERR?')
-        resp = resp.rstrip()
-        if not resp.startswith('0'):
-            print('ERROR: "{0}" after marker task loop'.format(resp))
-        print(resp)
+        self.awg.write(':INST:CHAN 2')
+        self.awg.write(':FUNC:MODE:SEGM 2')
+        # self.awg.write('FUNC:MODE TASK')
+        # self.awg.write(':FUNC:MODE:TASK 2')
+        self.awg.write('OUTP ON')
+        self.awg.write(':MARK:SEL 1')
+        self.awg.write(':MARK:STAT ON')
+        self.awg.write(':MARK:SEL 2')
+        self.awg.write(':MARK:STAT ON')
         print('运行到这了')
+        resp = self.awg.query(':SYST:ERR?')
+        resp = resp.rstrip()
+        if not resp.startswith('0'):
+            print('ERROR: "{0}" after start sequence task'.format(resp))
 
 
     def stop_sequence(self):
-        self.awg.send_scpi_cmd(':INST:CHAN 1')
-        self.awg.send_scpi_cmd('OUTP OFF')
-        #self.awg.send_scpi_cmd('FUNC:MODE TASK')
+        self.awg.write(':INST:CHAN 1')
+        self.awg.write('OUTP OFF')
+        self.awg.write(':MARK:SEL 1')
+        self.awg.write(':MARK:STAT OFF')
+        self.awg.write(':MARK:SEL 2')
+        self.awg.write(':MARK:STAT OFF')
 
-        self.awg.send_scpi_cmd(':MARK:SEL 1')
-        self.awg.send_scpi_cmd(':MARK:STAT OFF')
-        self.awg.send_scpi_cmd(':MARK:SEL 2')
-        self.awg.send_scpi_cmd(':MARK:STAT OFF')
-        #self.awg.send_scpi_cmd(':TRACe:DELete:ALL', 2)
-
+        self.awg.write(':INST:CHAN 2')
+        self.awg.write('OUTP OFF')
 
     def disconnect_awg(self,CLEAR_TEST = True, num_channels = 2):
         if CLEAR_TEST:
-            cmd = ':INST:CHAN 1'
-            self.awg.send_scpi_cmd(cmd, self.paranoia_level)
-            cmd = ':TRAC:ZERO:ALL'
-            self.awg.send_scpi_cmd(cmd, self.paranoia_level)
+            self.awg.write(':INST:CHAN 1')
+            self.awg.write(':TRAC:ZERO:ALL')
+            self.awg.write(':INST:CHAN 2')
+            self.awg.write(':TRAC:ZERO:ALL')
         chanlist = [1]
         imarker = 2
         for channb in chanlist:
             if channb <= num_channels:
-                cmd = ':INST:CHAN {0}'.format(channb)
-                self.awg.send_scpi_cmd(cmd, self.paranoia_level)
-                cmd = ':MARK:SEL {0}; :MARK:STAT OFF'.format(imarker)
-                self.awg.send_scpi_cmd(cmd, self.paranoia_level)
-        self.awg.close_instrument()
+                self.awg.write(':INST:CHAN {0}'.format(channb))
+                self.awg.write(':MARK:SEL {0}; :MARK:STAT OFF'.format(imarker))
+        self.awg.close ()
 
 
 

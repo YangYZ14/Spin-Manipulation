@@ -81,9 +81,9 @@ class Interface:
         # self.RF_t = self.ui.doubleSpinBox_6.value()
         self.RFPower = self.ui.doubleSpinBox_7.value() #设置射频功率,暂时还没有用到
         self.RFFreq = self.ui.doubleSpinBox_6.value() #设置射频频率位置
-        self.RF_t_start = self.ui.doubleSpinBox_3.value() #设置射频起始作用时间
+        self.RF_t_start = self.ui.doubleSpinBox_3.value() #设置射z频起始作用时间
         self.RF_t_stop = self.ui.doubleSpinBox_2.value() #设置射频结束作用时间
-        self.N = self.ui.doubleSpinBox_8.value() #设置射频作用时间点的个数
+        self.N = int(self.ui.doubleSpinBox_8.value()) #设置射频作用时间点的个数
 
         self.steptime = (self.RF_t_stop - self.RF_t_start)/self.N #设置每个射频作用时间步进
         self.timelist = np.array(self.steptime * np.array(range(self.N + 1)) + self.RF_t_start)
@@ -188,11 +188,12 @@ class Interface:
 
 
             self.Off_seglen2_1, self.Off_Channel1_Segment, self.Off_Marker_Segment1, self.Off_Marker_Segment1_1, self.Off_Marker_Segment1_2, self.Squence_time_all= self.AWG_TASK.sequence_set(self.All_sequence_off_1[self.i], self.MWFreq, self.sample_rate)
-            self.Off_seglen2_2, self.Off_Channel2_Segment, self.Off_Marker_Segment2, self.Off_Marker_Segment2_1, self.Off_Marker_Segment2_2, self.Squence_time_all = self.AWG_TASK.sequence_set(self.All_sequence_off_2, self.RFFreq, self.sample_rate)
+            self.Off_seglen2_2, self.Off_Channel2_Segment, self.Off_Marker_Segment2, self.Off_Marker_Segment2_1, self.Off_Marker_Segment2_2, self.Squence_time_all = self.AWG_TASK.sequence_set(self.All_sequence_off_2[self.i], self.RFFreq, self.sample_rate)
             # 将定义好的segment下载到相应的channel和marker段上去
             self.AWG_TASK.download_channel_segment(self.Off_seglen2_1, self.Off_Channel1_Segment, self.power1, self.chann_num1,self.seg_num1)
             self.AWG_TASK.download_marker_segment(self.Off_Marker_Segment1, self.ptop1, self.ptop2, self.offs1, self.offs2,self.chann_num1, self.seg_num1)
             self.AWG_TASK.download_channel_segment(self.Off_seglen2_2, self.Off_Channel2_Segment, self.power2, self.chann_num2,self.seg_num2)
+
             #self.AWG_TASK.download_marker_segment(self.Marker_Segment2, self.ptop1, self.ptop2, self.offs1, self.offs2,self.chann_num2, self.seg_num2)
             #self.AWG_TASK.sequence_task(self.loop_num1, self.chann_num1, self.total_task, self.task_num1, self.seg_num1)
             #self.AWG_TASK.sequence_task(self.loop_num2, self.chann_num2, self.total_task, self.task_num2, self.seg_num2)
@@ -200,7 +201,7 @@ class Interface:
             self.AWG_TASK.start_sequence()
             self.Off_data = self.counter.Read()  #从NI计数卡读取数据
             self.Off_data = self.data[1:]
-            time.sleep(20)
+            # time.sleep(20)
             self.AWG_TASK.stop_sequence()
             self.counter.DAQCounterTask.stop()
 
@@ -208,12 +209,12 @@ class Interface:
             self.Off_counts = sum(self.Off_data)
             self.contrast_1[self.i] = (self.On_counts - self.Off_counts) / (self.Off_counts + 1)
             self.i += 1  #i开始迭代
-            self.lock_count = self.Off_counts + 100
+            self.lock_count = self.Off_counts
 
     def update(self):
         self.ui.lineEdit.setText(str(self.cycle))
-        self.p1.plot(self.RF_list, self.contrast_1, pen='g', clear=True)
-        self.p2.plot(self.RF_list, self.contrast_2,pen='r',clear=True)
+        self.p1.plot(self.timelist, self.contrast_1, pen='g', clear=True)
+        self.p2.plot(self.timelist, self.contrast_2,pen='r',clear=True)
         self.p1.addLine(y=0, pen='r')
         self.p2.addLine(y=0, pen='r')
         if self.termination:
